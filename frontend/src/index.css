@@ -1,0 +1,25 @@
+html {
+min-width: 320px;
+min-height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+  }
+
+body {
+margin: 0;
+min-width: 320px;
+min-height: 100vh;
+font-family: "Inter", sans-serif;
+background: #f5f7fb;
+color: #172033;
+}
+
+#root {
+width: 100%;
+min-height: 100vh;
+margin: 0;
+padding: 0;
+text-align: left;
+}
