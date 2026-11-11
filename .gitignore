@@ -1,0 +1,22 @@
+# Database backup
+database/*.sql
+
+# Local backup files
+backend/server_old_backup.js
+frontend/src/App_old_backup.jsx
+
+# Dependencies
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# Environment variables
+.env
+.env.*
+
+# Build files
+dist/
+frontend/dist/
+
+# Logs
+*.log
