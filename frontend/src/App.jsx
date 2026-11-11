@@ -35,6 +35,8 @@ const emptyDriverForm = { driver_name: "", phone: "", license_number: "", licens
 const emptyShipmentForm = { customer_id: "", pickup_location: "", delivery_location: "", goods_description: "", weight: "", shipment_date: "", expected_delivery_date: "", status: "Pending" };
 const emptyCustomerForm = { customer_name: "", phone: "", email: "", address: "" };
 const makeEmptyPaymentForm = () => ({ shipment_id: "", amount: "", payment_date: new Date().toISOString().slice(0, 10), payment_method: "UPI", payment_status: "Pending" });
+const emptyRouteForm = { source: "", destination: "", distance: "", estimated_hours: "" };
+const makeEmptyTripForm = () => ({ shipment_id: "", truck_id: "", driver_id: "", route_id: "", departure_date: new Date().toISOString().slice(0, 16), arrival_date: "", trip_status: "Scheduled" });
 
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
@@ -91,6 +93,21 @@ function App() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState("");
 
+  const [routes, setRoutes] = useState([]);
+  const [trips, setTrips] = useState([]);
+  const [tripRouteLoading, setTripRouteLoading] = useState(false);
+  const [tripRouteError, setTripRouteError] = useState("");
+  const [routeSearch, setRouteSearch] = useState("");
+  const [tripSearch, setTripSearch] = useState("");
+  const [tripFilter, setTripFilter] = useState("All");
+  const [showRouteForm, setShowRouteForm] = useState(false);
+  const [editingRoute, setEditingRoute] = useState(null);
+  const [routeForm, setRouteForm] = useState(emptyRouteForm);
+  const [showTripForm, setShowTripForm] = useState(false);
+  const [editingTrip, setEditingTrip] = useState(null);
+  const [tripForm, setTripForm] = useState(makeEmptyTripForm());
+  const [tripRouteTab, setTripRouteTab] = useState("Trips");
+
   async function request(path, options = {}) {
     const response = await fetch(`${API}${path}`, {
       ...options,
@@ -144,6 +161,24 @@ function App() {
     finally { setReportLoading(false); }
   }
 
+  async function fetchRoutes() {
+    try { setRoutes(await request("/api/routes")); }
+    catch (err) { setTripRouteError(err.message); }
+  }
+  async function fetchTrips() {
+    try { setTrips(await request("/api/trips")); }
+    catch (err) { setTripRouteError(err.message); }
+  }
+  async function fetchTripRouteData() {
+    setTripRouteLoading(true); setTripRouteError("");
+    try {
+      const [routeRows, tripRows] = await Promise.all([request("/api/routes"), request("/api/trips")]);
+      setRoutes(routeRows); setTrips(tripRows);
+      await Promise.all([fetchTrucks(), fetchDrivers(), fetchShipments()]);
+    } catch (err) { setTripRouteError(err.message); }
+    finally { setTripRouteLoading(false); }
+  }
+
   useEffect(() => { fetchDashboard(); }, []);
   useEffect(() => {
     if (activePage === "Trucks") fetchTrucks();
@@ -152,6 +187,7 @@ function App() {
     if (activePage === "Customers") fetchCustomers();
     if (activePage === "Payments") { fetchPayments(); fetchShipments(); }
     if (activePage === "Reports") fetchReports();
+    if (activePage === "Trips & Routes") fetchTripRouteData();
   }, [activePage]);
 
   const filteredTrucks = useMemo(() => trucks.filter(t =>
@@ -173,6 +209,13 @@ function App() {
   const filteredPayments = useMemo(() => payments.filter(p =>
     `${p.payment_id} ${p.shipment_id} ${p.customer_name || ""} ${p.payment_method || ""} ${p.payment_status || ""}`.toLowerCase().includes(paymentSearch.toLowerCase()) &&
     (paymentFilter === "All" || p.payment_status === paymentFilter)), [payments, paymentSearch, paymentFilter]);
+
+  const filteredRoutes = useMemo(() => routes.filter(r =>
+    `${r.source || ""} ${r.destination || ""}`.toLowerCase().includes(routeSearch.toLowerCase())),
+    [routes, routeSearch]);
+  const filteredTrips = useMemo(() => trips.filter(t =>
+    `${t.trip_id} ${t.trip_status || ""} ${t.driver_name || ""} ${t.registration_number || ""} ${t.source || ""} ${t.destination || ""}`.toLowerCase().includes(tripSearch.toLowerCase()) &&
+    (tripFilter === "All" || t.trip_status === tripFilter)), [trips, tripSearch, tripFilter]);
 
   async function saveRecord(path, method, payload, refresh, errorSetter, close) {
     try {
@@ -272,6 +315,46 @@ function App() {
     await saveRecord(editingPayment ? `/api/payments/${editingPayment.payment_id}` : "/api/payments",
       editingPayment ? "PUT" : "POST", payload, fetchPayments, setPaymentError, () => setShowPaymentForm(false));
     setEditingPayment(null); setPaymentForm(makeEmptyPaymentForm());
+  }
+
+  function openRouteForm(route = null) {
+    setEditingRoute(route);
+    setRouteForm(route ? {
+      source: route.source || "", destination: route.destination || "",
+      distance: route.distance ?? "", estimated_hours: route.estimated_hours ?? ""
+    } : emptyRouteForm);
+    setTripRouteError(""); setShowRouteForm(true);
+  }
+  async function handleRouteSubmit(e) {
+    e.preventDefault(); setTripRouteError("");
+    const payload = { ...routeForm, distance: Number(routeForm.distance), estimated_hours: Number(routeForm.estimated_hours) };
+    const ok = await saveRecord(editingRoute ? `/api/routes/${editingRoute.route_id}` : "/api/routes",
+      editingRoute ? "PUT" : "POST", payload, fetchRoutes, setTripRouteError, () => setShowRouteForm(false));
+    if (ok) { setEditingRoute(null); setRouteForm(emptyRouteForm); }
+  }
+
+  function openTripForm(trip = null) {
+    setEditingTrip(trip);
+    setTripForm(trip ? {
+      shipment_id: trip.shipment_id ?? "", truck_id: trip.truck_id ?? "",
+      driver_id: trip.driver_id ?? "", route_id: trip.route_id ?? "",
+      departure_date: trip.departure_date ? String(trip.departure_date).slice(0, 16) : "",
+      arrival_date: trip.arrival_date ? String(trip.arrival_date).slice(0, 16) : "",
+      trip_status: trip.trip_status || "Scheduled"
+    } : makeEmptyTripForm());
+    setTripRouteError(""); setShowTripForm(true);
+  }
+  async function handleTripSubmit(e) {
+    e.preventDefault(); setTripRouteError("");
+    const payload = {
+      ...tripForm,
+      shipment_id: Number(tripForm.shipment_id), truck_id: Number(tripForm.truck_id),
+      driver_id: Number(tripForm.driver_id), route_id: Number(tripForm.route_id),
+      arrival_date: tripForm.arrival_date || null
+    };
+    const ok = await saveRecord(editingTrip ? `/api/trips/${editingTrip.trip_id}` : "/api/trips",
+      editingTrip ? "PUT" : "POST", payload, fetchTrips, setTripRouteError, () => setShowTripForm(false));
+    if (ok) { setEditingTrip(null); setTripForm(makeEmptyTripForm()); await fetchTripRouteData(); }
   }
 
   const menuItems = [["Dashboard", "▦"], ["Trucks", "🚛"], ["Drivers", "👥"], ["Shipments", "📦"],
@@ -440,13 +523,82 @@ function App() {
           {!reportLoading && !reports && !reportError && <p>No report data available.</p>}
         </section>}
 
-        {activePage === "Trips & Routes" && <section style={{ padding: "20px 0" }}>
-          <header className="topbar"><div><h1>Trips & Routes</h1><p>This module has not been implemented yet.</p></div></header>
-          <div style={styles.placeholder}><div style={{ fontSize: 50 }}>🚧</div><h2>Trips & Routes Module</h2>
-            <p>This section is not connected to backend APIs yet. Your existing data is safe.</p>
-            <button style={styles.primaryButton} onClick={() => setActivePage("Dashboard")}>Back to Dashboard</button></div>
+        {activePage === "Trips & Routes" && <section style={{ padding: "10px 0" }}>
+          {pageHeader("Trips & Routes", "Plan journeys, assign fleet resources and manage delivery routes.")}
+          <div style={{ display: "flex", gap: 10, margin: "25px 0 18px", flexWrap: "wrap" }}>
+            {["Trips", "Routes"].map(tab => <button key={tab} style={tripRouteTab === tab ? styles.primaryButton : styles.secondaryButton}
+              onClick={() => setTripRouteTab(tab)}>{tab} ({tab === "Trips" ? trips.length : routes.length})</button>)}
+            <button style={{ ...styles.secondaryButton, marginLeft: "auto" }} onClick={fetchTripRouteData}>↻ Refresh</button>
+          </div>
+          {tripRouteError && <div style={styles.errorBox}>{tripRouteError}</div>}
+          {tripRouteLoading ? <p>Loading trips and routes...</p> : <>
+            {tripRouteTab === "Trips" && <>
+              <div style={styles.toolbar}><div><h2 style={{ margin: 0 }}>Trip Records</h2><p style={{ color: "#718096", marginTop: 7 }}>{trips.length} trips in your database</p></div>
+                <button style={styles.primaryButton} onClick={() => openTripForm()}>+ Add Trip</button></div>
+              <div style={styles.filters}>
+                <input style={styles.searchInput} placeholder="Search trip, driver, truck or route..." value={tripSearch} onChange={e => setTripSearch(e.target.value)} />
+                <select style={styles.select} value={tripFilter} onChange={e => setTripFilter(e.target.value)}>
+                  <option>All</option><option>Scheduled</option><option>In Progress</option><option>Completed</option><option>Cancelled</option>
+                </select>
+              </div>
+              {renderTable(["Trip ID", "Shipment", "Truck", "Driver", "Route", "Departure", "Arrival", "Status", "Actions"],
+                filteredTrips.map(t => <tr key={t.trip_id}>
+                  <td style={styles.td}>{t.trip_id}</td><td style={styles.td}>#{t.shipment_id}</td>
+                  <td style={styles.td}>{t.registration_number || `#${t.truck_id}`}</td><td style={styles.td}>{t.driver_name || `#${t.driver_id}`}</td>
+                  <td style={styles.td}>{t.source || "—"} → {t.destination || "—"}</td>
+                  <td style={styles.td}>{t.departure_date ? new Date(t.departure_date).toLocaleString("en-IN") : "—"}</td>
+                  <td style={styles.td}>{t.arrival_date ? new Date(t.arrival_date).toLocaleString("en-IN") : "—"}</td>
+                  <td style={styles.td}>{statusBadge(t.trip_status)}</td><td style={styles.td}>
+                    <button style={styles.editButton} onClick={() => openTripForm(t)}>Edit</button>
+                    <button style={styles.deleteButton} onClick={() => deleteRecord(`/api/trips/${t.trip_id}`, `trip #${t.trip_id}`, fetchTrips, setTripRouteError)}>Delete</button>
+                  </td></tr>))}
+            </>}
+            {tripRouteTab === "Routes" && <>
+              <div style={styles.toolbar}><div><h2 style={{ margin: 0 }}>Route Records</h2><p style={{ color: "#718096", marginTop: 7 }}>{routes.length} routes in your database</p></div>
+                <button style={styles.primaryButton} onClick={() => openRouteForm()}>+ Add Route</button></div>
+              <div style={styles.filters}><input style={styles.searchInput} placeholder="Search source or destination..." value={routeSearch} onChange={e => setRouteSearch(e.target.value)} /></div>
+              {renderTable(["Route ID", "Source", "Destination", "Distance (KM)", "Estimated Hours", "Actions"],
+                filteredRoutes.map(r => <tr key={r.route_id}><td style={styles.td}>{r.route_id}</td>
+                  <td style={styles.td}>{r.source}</td><td style={styles.td}>{r.destination}</td>
+                  <td style={styles.td}>{Number(r.distance).toLocaleString("en-IN")}</td><td style={styles.td}>{r.estimated_hours}</td>
+                  <td style={styles.td}><button style={styles.editButton} onClick={() => openRouteForm(r)}>Edit</button>
+                    <button style={styles.deleteButton} onClick={() => deleteRecord(`/api/routes/${r.route_id}`, `route ${r.source} to ${r.destination}`, fetchRoutes, setTripRouteError)}>Delete</button></td></tr>))}
+            </>}
+          </>}
         </section>}
       </main>
+<>
+      {showRouteForm && <div style={styles.overlay}><div style={styles.modal}>
+        <div style={styles.modalHeader}><div><h2 style={{ margin: 0 }}>{editingRoute ? "Edit Route" : "Add New Route"}</h2><p style={{ color: "#718096" }}>Enter route details.</p></div>
+          <button style={styles.closeButton} onClick={() => setShowRouteForm(false)}>✕</button></div>
+        <form onSubmit={handleRouteSubmit}>
+          <label style={styles.label}>Source *</label><input style={styles.formInput} required value={routeForm.source} onChange={e => setRouteForm({ ...routeForm, source: e.target.value })} placeholder="e.g. Hyderabad" />
+          <label style={styles.label}>Destination *</label><input style={styles.formInput} required value={routeForm.destination} onChange={e => setRouteForm({ ...routeForm, destination: e.target.value })} placeholder="e.g. Pune" />
+          <label style={styles.label}>Distance (KM) *</label><input style={styles.formInput} type="number" min="0.01" step="0.01" required value={routeForm.distance} onChange={e => setRouteForm({ ...routeForm, distance: e.target.value })} />
+          <label style={styles.label}>Estimated Hours *</label><input style={styles.formInput} type="number" min="0.01" step="0.01" required value={routeForm.estimated_hours} onChange={e => setRouteForm({ ...routeForm, estimated_hours: e.target.value })} />
+          {tripRouteError && <div style={styles.errorBox}>{tripRouteError}</div>}
+          <div style={styles.formActions}><button type="button" style={styles.secondaryButton} onClick={() => setShowRouteForm(false)}>Cancel</button><button style={styles.primaryButton}>Save Route</button></div>
+        </form></div></div>}
+
+      {showTripForm && <div style={styles.overlay}><div style={{ ...styles.modal, maxWidth: 620 }}>
+        <div style={styles.modalHeader}><div><h2 style={{ margin: 0 }}>{editingTrip ? "Edit Trip" : "Schedule New Trip"}</h2><p style={{ color: "#718096" }}>Assign a shipment, truck, driver and route.</p></div>
+          <button style={styles.closeButton} onClick={() => setShowTripForm(false)}>✕</button></div>
+        <form onSubmit={handleTripSubmit}>
+          <label style={styles.label}>Shipment *</label><select style={styles.formInput} required value={tripForm.shipment_id} onChange={e => setTripForm({ ...tripForm, shipment_id: e.target.value })}>
+            <option value="">Select shipment</option>{shipments.map(s => <option key={s.shipment_id} value={s.shipment_id}>#{s.shipment_id} — {s.pickup_location} to {s.delivery_location}</option>)}</select>
+          <label style={styles.label}>Truck *</label><select style={styles.formInput} required value={tripForm.truck_id} onChange={e => setTripForm({ ...tripForm, truck_id: e.target.value })}>
+            <option value="">Select truck</option>{trucks.map(t => <option key={t.truck_id} value={t.truck_id}>{t.registration_number} — {t.truck_model || "Truck"}</option>)}</select>
+          <label style={styles.label}>Driver *</label><select style={styles.formInput} required value={tripForm.driver_id} onChange={e => setTripForm({ ...tripForm, driver_id: e.target.value })}>
+            <option value="">Select driver</option>{drivers.map(d => <option key={d.driver_id} value={d.driver_id}>{d.driver_name}</option>)}</select>
+          <label style={styles.label}>Route *</label><select style={styles.formInput} required value={tripForm.route_id} onChange={e => setTripForm({ ...tripForm, route_id: e.target.value })}>
+            <option value="">Select route</option>{routes.map(r => <option key={r.route_id} value={r.route_id}>{r.source} → {r.destination} ({r.distance} KM)</option>)}</select>
+          <label style={styles.label}>Departure Date & Time *</label><input style={styles.formInput} type="datetime-local" required value={tripForm.departure_date} onChange={e => setTripForm({ ...tripForm, departure_date: e.target.value })} />
+          <label style={styles.label}>Arrival Date & Time</label><input style={styles.formInput} type="datetime-local" min={tripForm.departure_date || undefined} value={tripForm.arrival_date} onChange={e => setTripForm({ ...tripForm, arrival_date: e.target.value })} />
+          <label style={styles.label}>Trip Status</label><select style={styles.formInput} value={tripForm.trip_status} onChange={e => setTripForm({ ...tripForm, trip_status: e.target.value })}>
+            <option>Scheduled</option><option>In Progress</option><option>Completed</option><option>Cancelled</option></select>
+          {tripRouteError && <div style={styles.errorBox}>{tripRouteError}</div>}
+          <div style={styles.formActions}><button type="button" style={styles.secondaryButton} onClick={() => setShowTripForm(false)}>Cancel</button><button style={styles.primaryButton}>Save Trip</button></div>
+        </form></div></div>}
 
       {showTruckForm && <div style={styles.overlay}><div style={styles.modal}>
         <div style={styles.modalHeader}><div><h2 style={{ margin: 0 }}>{editingTruck ? "Edit Truck" : "Add New Truck"}</h2><p style={{ color: "#718096" }}>Enter the truck information below.</p></div>
@@ -511,6 +663,7 @@ function App() {
           <label style={styles.label}>Payment Status</label><select style={styles.formInput} value={paymentForm.payment_status} onChange={e => setPaymentForm({ ...paymentForm, payment_status: e.target.value })}><option>Pending</option><option>Paid</option><option>Completed</option><option>Failed</option></select>
           {paymentError && <div style={styles.errorBox}>{paymentError}</div>}<div style={styles.formActions}><button type="button" style={styles.secondaryButton} onClick={() => setShowPaymentForm(false)}>Cancel</button><button style={styles.primaryButton}>{editingPayment ? "Save Changes" : "Record Payment"}</button></div>
         </form></div></div>}
+</>
     </div>
   );
 }

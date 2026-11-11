@@ -562,6 +562,391 @@ app.get("/api/reports", async (req, res) => {
     } catch (error) { console.error(error); res.status(500).json({ message: error.message }); }
 });
 
+// ==========================================
+// ROUTES MANAGEMENT APIs
+// ==========================================
+
+// GET ALL ROUTES
+app.get("/api/routes", async (req, res) => {
+    try {
+        const result = await db.query(
+            "SELECT * FROM routes ORDER BY route_id ASC"
+        );
+
+        res.json(result.rows);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: error.message });
+    }
+});
+
+
+// ADD NEW ROUTE
+app.post("/api/routes", async (req, res) => {
+    try {
+        const { source, destination, distance, estimated_hours } = req.body;
+
+        if (!source?.trim() || !destination?.trim()) {
+            return res.status(400).json({
+                message: "Source and destination are required"
+            });
+        }
+
+        if (Number(distance) <= 0 || distance === "" || distance == null) {
+            return res.status(400).json({
+                message: "Distance must be greater than zero"
+            });
+        }
+
+        if (Number(estimated_hours) <= 0 || estimated_hours === "" || estimated_hours == null) {
+            return res.status(400).json({
+                message: "Estimated hours must be greater than zero"
+            });
+        }
+
+        const result = await db.query(
+            `INSERT INTO routes
+            (source, destination, distance, estimated_hours)
+            VALUES ($1, $2, $3, $4)
+            RETURNING *`,
+            [
+                source.trim(),
+                destination.trim(),
+                Number(distance),
+                Number(estimated_hours)
+            ]
+        );
+
+        res.status(201).json(result.rows[0]);
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: error.message });
+    }
+});
+
+
+// UPDATE ROUTE
+app.put("/api/routes/:id", async (req, res) => {
+    try {
+        const { source, destination, distance, estimated_hours } = req.body;
+
+        if (!source?.trim() || !destination?.trim()) {
+            return res.status(400).json({
+                message: "Source and destination are required"
+            });
+        }
+
+        if (
+            Number(distance) <= 0 ||
+            distance === "" ||
+            distance == null ||
+            Number(estimated_hours) <= 0 ||
+            estimated_hours === "" ||
+            estimated_hours == null
+        ) {
+            return res.status(400).json({
+                message: "Distance and estimated hours must be greater than zero"
+            });
+        }
+
+        const result = await db.query(
+            `UPDATE routes
+             SET source=$1,
+                 destination=$2,
+                 distance=$3,
+                 estimated_hours=$4
+             WHERE route_id=$5
+             RETURNING *`,
+            [
+                source.trim(),
+                destination.trim(),
+                Number(distance),
+                Number(estimated_hours),
+                req.params.id
+            ]
+        );
+
+        if (!result.rows.length) {
+            return res.status(404).json({
+                message: "Route not found"
+            });
+        }
+
+        res.json(result.rows[0]);
+
+    } catch (error) {
+        console.error(error);
+
+        if (error.code === "23503") {
+            return res.status(409).json({
+                message: "This route is assigned to an existing trip and cannot be deleted."
+            });
+        }
+
+        res.status(500).json({ message: error.message });
+    }
+});
+
+
+// DELETE ROUTE
+app.delete("/api/routes/:id", async (req, res) => {
+    try {
+        const result = await db.query(
+            "DELETE FROM routes WHERE route_id=$1 RETURNING *",
+            [req.params.id]
+        );
+
+        if (!result.rows.length) {
+            return res.status(404).json({
+                message: "Route not found"
+            });
+        }
+
+        res.json({
+            message: "Route deleted successfully"
+        });
+
+    } catch (error) {
+        console.error(error);
+
+        if (error.code === "23503") {
+            return res.status(409).json({
+                message: "This route is assigned to an existing trip and cannot be deleted."
+            });
+        }
+
+        res.status(500).json({ message: error.message });
+    }
+});
+
+
+// ==========================================
+// TRIPS MANAGEMENT APIs
+// ==========================================
+
+// GET ALL TRIPS
+app.get("/api/trips", async (req, res) => {
+    try {
+        const result = await db.query(
+            `SELECT
+                t.*,
+                s.pickup_location,
+                s.delivery_location,
+                tr.registration_number,
+                d.driver_name,
+                r.source,
+                r.destination,
+                r.distance
+
+             FROM trips t
+
+             LEFT JOIN shipments s
+                ON s.shipment_id = t.shipment_id
+
+             LEFT JOIN trucks tr
+                ON tr.truck_id = t.truck_id
+
+             LEFT JOIN drivers d
+                ON d.driver_id = t.driver_id
+
+             LEFT JOIN routes r
+                ON r.route_id = t.route_id
+
+             ORDER BY t.trip_id ASC`
+        );
+
+        res.json(result.rows);
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: error.message });
+    }
+});
+
+
+// ADD NEW TRIP
+app.post("/api/trips", async (req, res) => {
+    try {
+        const {
+            shipment_id,
+            truck_id,
+            driver_id,
+            route_id,
+            departure_date,
+            arrival_date,
+            trip_status
+        } = req.body;
+
+        if (
+            ![shipment_id, truck_id, driver_id, route_id]
+                .every(value =>
+                    Number.isInteger(Number(value)) && Number(value) > 0
+                )
+        ) {
+            return res.status(400).json({
+                message: "Select a shipment, truck, driver and route"
+            });
+        }
+
+        if (!departure_date) {
+            return res.status(400).json({
+                message: "Departure date is required"
+            });
+        }
+
+        if (arrival_date && new Date(arrival_date) < new Date(departure_date)) {
+            return res.status(400).json({
+                message: "Arrival date cannot be before departure date"
+            });
+        }
+
+        const result = await db.query(
+            `INSERT INTO trips
+            (
+                shipment_id,
+                truck_id,
+                driver_id,
+                route_id,
+                departure_date,
+                arrival_date,
+                trip_status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING *`,
+            [
+                Number(shipment_id),
+                Number(truck_id),
+                Number(driver_id),
+                Number(route_id),
+                departure_date,
+                arrival_date || null,
+                trip_status || "Scheduled"
+            ]
+        );
+
+        res.status(201).json(result.rows[0]);
+
+    } catch (error) {
+        console.error(error);
+
+        if (error.code === "23503") {
+            return res.status(400).json({
+                message: "One of the selected shipment, truck, driver or route does not exist."
+            });
+        }
+
+        res.status(500).json({ message: error.message });
+    }
+});
+
+
+// UPDATE TRIP
+app.put("/api/trips/:id", async (req, res) => {
+    try {
+        const {
+            shipment_id,
+            truck_id,
+            driver_id,
+            route_id,
+            departure_date,
+            arrival_date,
+            trip_status
+        } = req.body;
+
+        if (
+            ![shipment_id, truck_id, driver_id, route_id]
+                .every(value =>
+                    Number.isInteger(Number(value)) && Number(value) > 0
+                )
+        ) {
+            return res.status(400).json({
+                message: "Select a shipment, truck, driver and route"
+            });
+        }
+
+        if (!departure_date) {
+            return res.status(400).json({
+                message: "Departure date is required"
+            });
+        }
+
+        if (arrival_date && new Date(arrival_date) < new Date(departure_date)) {
+            return res.status(400).json({
+                message: "Arrival date cannot be before departure date"
+            });
+        }
+
+        const result = await db.query(
+            `UPDATE trips
+             SET shipment_id=$1,
+                 truck_id=$2,
+                 driver_id=$3,
+                 route_id=$4,
+                 departure_date=$5,
+                 arrival_date=$6,
+                 trip_status=$7
+
+             WHERE trip_id=$8
+             RETURNING *`,
+            [
+                Number(shipment_id),
+                Number(truck_id),
+                Number(driver_id),
+                Number(route_id),
+                departure_date,
+                arrival_date || null,
+                trip_status || "Scheduled",
+                req.params.id
+            ]
+        );
+
+        if (!result.rows.length) {
+            return res.status(404).json({
+                message: "Trip not found"
+            });
+        }
+
+        res.json(result.rows[0]);
+
+    } catch (error) {
+        console.error(error);
+
+        if (error.code === "23503") {
+            return res.status(400).json({
+                message: "One of the selected shipment, truck, driver or route does not exist."
+            });
+        }
+
+        res.status(500).json({ message: error.message });
+    }
+});
+
+
+// DELETE TRIP
+app.delete("/api/trips/:id", async (req, res) => {
+    try {
+        const result = await db.query(
+            "DELETE FROM trips WHERE trip_id=$1 RETURNING *",
+            [req.params.id]
+        );
+
+        if (!result.rows.length) {
+            return res.status(404).json({
+                message: "Trip not found"
+            });
+        }
+
+        res.json({
+            message: "Trip deleted successfully"
+        });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: error.message });
+    }
+});
+
 // START SERVER
 const PORT = process.env.PORT || 5000;
 
